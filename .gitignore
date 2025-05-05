@@ -1,0 +1,48 @@
+# Build directories
+/build/
+/bin/
+/out/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# IDE project files
+*.sdf
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Cache folders
+/cache/
+*.cache/
+
+# Object and binary files
+*.o
+*.obj
+*.lo
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+*.out
+
+# Logs
+*.log
+
+# Backup files
+*~
+*.swp
+*.tmp
+
+# Ignore the .git folder — technically unnecessary
+.git/
