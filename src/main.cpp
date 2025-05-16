@@ -4,6 +4,7 @@
 #include "filemanager.h"
 #include <GLFW/glfw3.h>
 #include <cmath>
+#include <filesystem>
 #include <glad/glad.h>
 #include <iostream>
 #define STB_IMAGE_IMPLEMENTATION
@@ -65,6 +66,11 @@ int main() {
   // -----------
   while (!glfwWindowShouldClose(window)) {
     processInput(window);
+    static double lastTime = glfwGetTime();
+    double now = glfwGetTime();
+    float dt = float(now - lastTime);
+    lastTime = now;
+
     float amp = get_amplitude();
     float time = glfwGetTime();
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
@@ -81,13 +87,13 @@ int main() {
 
     if (isrender) {
       ImGui::Begin("Visualization");
-      const char *items[] = {"Circle", "Bars"};
+      const char *items[] = {"Bars", "Circle"};
       ImGui::Combo("Shader Mode", &player.shadermode, items,
                    IM_ARRAYSIZE(items));
       ImGui::End();
     }
 
-    player.render(&amp, &time);
+    player.render(&amp, &time, dt);
 
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

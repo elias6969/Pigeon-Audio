@@ -1,11 +1,12 @@
 #include "audio.h"
 #include "filemanager.h"
 #include "stb_image.h"
+#include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#include <algorithm>
 #include <cmath>
 #include <expected>
 #include <fftw3.h>
-#include <glad/glad.h>
 #include <iostream>
 #include <iterator>
 #include <mutex>
@@ -124,20 +125,25 @@ void AudioPlayer::init() {
 
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  VirtualFileSystem vfs("../assets/");
-  std::string Shaderspath = vfs.getFullPath("Shaders/");
-  std::string ImagePath = vfs.getFullPath("Textures/");
-  auto result = loadTexture((ImagePath + "mm.jpg").c_str());
-  if (!result) {
-    std::cerr << "Texture error: " << result.error() << '\n';
-  } else {
-    imagetex = result.value();
-  }
-  circleShader.LoadShaders((Shaderspath + "circle.vs").c_str(),
-                           (Shaderspath + "circle.fs").c_str());
+  try {
+    VirtualFileSystem vfs;
+    std::string Shaderspath = vfs.getFullPath("Shaders/");
+    std::string ImagePath = vfs.getFullPath("Textures/");
+    auto result = loadTexture((ImagePath + "mm.jpg").c_str());
+    if (!result) {
+      std::cerr << "Texture error: " << result.error() << '\n';
+    } else {
+      imagetex = result.value();
+    }
+    circleShader.LoadShaders((Shaderspath + "circle.vs").c_str(),
+                             (Shaderspath + "circle.fs").c_str());
 
-  barShader.LoadShaders((Shaderspath + "circle.vs").c_str(),
-                        (Shaderspath + "bars.fs").c_str());
+    barShader.LoadShaders((Shaderspath + "circle.vs").c_str(),
+                          (Shaderspath + "bars.fs").c_str());
+  } catch (std::exception &e) {
+    std::cerr << "Fatal: " << e.what() << '\n';
+  }
+  shadermode = 0;
 }
 
 void render_circle(float amplitude) {
@@ -158,40 +164,20 @@ void render_circle(float amplitude) {
   glEnd();
 }
 
-void AudioPlayer::render(float *amp, float *time) {
-  std::cout << "Shader mode: " << shadermode << std::endl;
+void AudioPlayer::render(float *amp, float *time, float dt) {
+  // std::cout << "Shader mode: " << shadermode << std::endl;
 
-  if (shadermode == 0) { // bar visualizer
-    barShader.use();
-    barShader.setFloat("u_amplitude", *amp);
-    barShader.setFloat("u_time", *time);
+  if (shadermode == 0) { // circle visalizuer or something
+    circleShader.use();
+    circleShader.setFloat("u_amplitude", *amp);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, imagetex);
-    barShader.setInt("u_texture", 0);
-
-    static float smoothedBinds[NUM_BARS] = {0.0f};
-    auto raw = get_fft_data();
-    for (int i = 0; i < NUM_BARS; ++i) {
-      float v = (i < raw.size()) ? raw[i] : 0.0f;
-      smoothedBinds[i] =
-          SMOOTH_FACTOR * v + (1.0f - SMOOTH_FACTOR) * smoothedBinds[i];
-    }
-
-    static float padded[4 * NUM_BARS];
-    for (int i = 0; i < NUM_BARS; ++i) {
-      padded[i * 4 + 0] = smoothedBinds[i];
-      padded[i * 4 + 1] = 0.0f;
-      padded[i * 4 + 2] = 0.0f;
-      padded[i * 4 + 3] = 0.0f;
-    }
-
-    glBindBuffer(GL_UNIFORM_BUFFER, ubo_fft);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(padded), padded);
+    circleShader.setInt("u_texture", 0);
 
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-  } else if (shadermode == 1) {
+  } else if (shadermode == 1) { // Bar Visualiser
     barShader.use();
     barShader.setFloat("u_amplitude", *amp);
     barShader.setFloat("u_time", *time);
@@ -200,15 +186,39 @@ void AudioPlayer::render(float *amp, float *time) {
     barShader.setInt("u_texture", 0);
 
     static float smoothedBinds[NUM_BARS] = {0.0f};
+    static float runningAvg[NUM_BARS] = {0.0f};
+
+    const float tau = 0.05f;
+    float alpha = std::exp(-dt / tau);
+    const float avgAlpha = 0.995f; // keeps a long-term average
+    const float compExp = 0.3f;    // <1 = stronger compression of spikes
+    const float globalGain = 0.05f; // 0 = silent, 1 = full sensitivity
+    const float smoothFact = 0.9f; // closer to 1 = more temporal smoothing
+
     auto raw = get_fft_data();
-    float fftArray[NUM_BARS];
     for (int i = 0; i < NUM_BARS; ++i) {
-      float v = (i < raw.size()) ? raw[i] : 0.0f;
-      smoothedBinds[i] =
-          SMOOTH_FACTOR * v + (1.0f - SMOOTH_FACTOR) * smoothedBinds[i];
+      float start = std::pow(float(i) / NUM_BARS, 2.2f) * (FFT_SIZE / 2);
+      float end = std::pow(float(i + 1) / NUM_BARS, 2.2f) * (FFT_SIZE / 2);
+      int b0 = std::clamp(int(start), 0, FFT_SIZE / 2 - 1);
+      int b1 = std::clamp(int(end), 0, FFT_SIZE / 2 - 1);
+
+      float sum = 0.0f;
+      for (int b = b0; b <= b1; b++)
+        sum += raw[b];
+      float v = (b1 >= b0) ? (sum / (b1 - b0 + 1)) : raw[b0];
+
+      runningAvg[i] = avgAlpha * runningAvg[i] + (1.0f - avgAlpha) * v;
+
+      float v_eq = v / (runningAvg[i] + 1e-6f);
+
+      v_eq = std::pow(v_eq, compExp);
+
+      v_eq *= globalGain;
+
+      smoothedBinds[i] = alpha * smoothedBinds[i] + (1.0f - alpha) * v_eq;
+          
     }
 
-    // build a temporary padded array
     static float padded[4 * NUM_BARS];
     for (int i = 0; i < NUM_BARS; ++i) {
       padded[i * 4 + 0] = smoothedBinds[i]; // your value
@@ -217,18 +227,8 @@ void AudioPlayer::render(float *amp, float *time) {
       padded[i * 4 + 3] = 0.0f;
     }
 
-    // upload all 3200 bytes
     glBindBuffer(GL_UNIFORM_BUFFER, ubo_fft);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(padded), padded);
-
-    glBindVertexArray(vao);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-  } else { // circle pulse
-    circleShader.use();
-    circleShader.setFloat("u_amplitude", *amp);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, imagetex);
-    circleShader.setInt("u_texture", 0);
 
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);

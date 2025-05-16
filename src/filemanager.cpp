@@ -3,6 +3,22 @@
 #include <stdexcept>
 #include "filemanager.h"
 
+
+VirtualFileSystem::VirtualFileSystem() {
+    // Figure out the absolute path to the running executable
+    fs::path exePath = fs::canonical("/proc/self/exe");
+    // We assume your binary is in build/, so go up one level to project root
+    fs::path projectRoot = exePath.parent_path().parent_path();
+    baseDir = (projectRoot / "assets").string();
+
+    if (!fs::exists(baseDir)) {
+        std::cerr << "Base directory does not exist: "
+                  << baseDir << std::endl;
+        throw std::runtime_error("Missing assets directory at " + baseDir);
+    }
+    std::cout << "BASE-DIRECTORY-FOUND::" << baseDir << std::endl;
+}
+
 VirtualFileSystem::VirtualFileSystem(const std::string& basePath) : baseDir(basePath) {
     if (!fs::exists(baseDir)) {
         std::cerr << "Base directory does not exist: " << fs::absolute(baseDir) << std::endl;

@@ -18,7 +18,7 @@ std::vector<float> get_fft_data();
 class AudioPlayer {
 public:
   void init();
-  void render(float *amp, float *time);
+  void render(float *amp, float *time, float dt);
   int shadermode;
 private:
   std::string Shaderspath, imagepath;

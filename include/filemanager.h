@@ -2,20 +2,20 @@
 #ifndef FILEMANAGER_H
 #define FILEMANAGER_H
 
-#include <string>
 #include <filesystem>
+#include <string>
 
 namespace fs = std::filesystem;
 
 class VirtualFileSystem {
 public:
-    explicit VirtualFileSystem(const std::string& basePath);
-    std::string getFullPath(const std::string& relativePath) const;
-    std::string readFile(const std::string& relativePath);
+  VirtualFileSystem();
+  explicit VirtualFileSystem(const std::string &basePath);
+  std::string getFullPath(const std::string &relativePath) const;
+  std::string readFile(const std::string &relativePath);
 
 private:
-    std::string baseDir;
+  std::string baseDir;
 };
 
 #endif // FILEMANAGER_H
-
