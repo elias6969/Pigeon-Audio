@@ -9,6 +9,7 @@
 #include <iostream>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+#include "tinyfiledialogs.h"
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <imgui.h>
@@ -18,8 +19,8 @@ void framebuffer_size_callback(GLFWwindow *window, int width, int height);
 void processInput(GLFWwindow *window);
 
 // settings
-unsigned int SCR_WIDTH = 800;
-unsigned int SCR_HEIGHT = 600;
+int SCR_WIDTH = 800;
+int SCR_HEIGHT = 600;
 
 int main() {
   glfwInit();
@@ -60,10 +61,12 @@ int main() {
 
   AudioPlayer player;
   player.init();
-
   bool isrender = false;
+  const char *filePath;
+  char imagePath[256] = "";
+  VirtualFileSystem vfs("assets");
+  
   // render loop
-  // -----------
   while (!glfwWindowShouldClose(window)) {
     processInput(window);
     static double lastTime = glfwGetTime();
@@ -87,13 +90,67 @@ int main() {
 
     if (isrender) {
       ImGui::Begin("Visualization");
-      const char *items[] = {"Bars", "Circle"};
+      const char *items[] = {"Simple", "Bars", "glob"};
       ImGui::Combo("Shader Mode", &player.shadermode, items,
                    IM_ARRAYSIZE(items));
+      ImGui::Separator();
+      ImGui::Text("Image");
+
+      static int selectedImageIndex = player.selectedImage;
+      if (!player.textureItems.empty()) {
+        if (ImGui::Combo("Images", &selectedImageIndex,
+                         player.textureItems.data(),
+                         player.textureItems.size())) {
+          if (selectedImageIndex != player.selectedImage) {
+            player.selectedImage = selectedImageIndex;
+            player.loadSelectedTexture();
+          }
+        }
+      }
+
+      ImGui::Text("Load image");
+      ImGui::InputText("##Load image", imagePath, IM_ARRAYSIZE(imagePath));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse")) {
+        const char *filter[] = {"*.png", "*.jpg", "*.jpeg", "*.bmp"};
+        filePath =
+            tinyfd_openFileDialog("Select an Image", // aTitle
+                                  "",                // aDefaultPathAndFile
+                                  4,                 // aNumOfFilterPatterns
+                                  filter,            // aFilterPatterns
+                                  "Image Files",     // aSingleFilterDescription
+                                  0 // aAllowMultipleSelects (0 = single file)
+            );
+
+        if (filePath) {
+          strncpy(imagePath, filePath, IM_ARRAYSIZE(imagePath));
+        }
+      }
+
+      if (ImGui::Button("Load", ImVec2(200, 40))) {
+        std::string imgName =
+            std::filesystem::path(imagePath).filename().string();
+
+        std::filesystem::path source(imagePath);
+        std::filesystem::path destination =
+            vfs.getFullPath("Textures/") + source.filename().string();
+
+        try {
+          std::filesystem::copy_file(
+              source, destination,
+              std::filesystem::copy_options::overwrite_existing);
+        } catch (const std::filesystem::filesystem_error &e) {
+          std::cerr << "Failed to copy file: " << e.what() << '\n';
+        }
+        player.textureNames.push_back(imgName);
+        player.textureItems.push_back(player.textureNames.back().c_str());
+        player.selectedImage = player.textureNames.size() - 1;
+        player.loadSelectedTexture();
+      }
       ImGui::End();
     }
 
-    player.render(&amp, &time, dt);
+    player.render(&amp, &time, dt, SCR_WIDTH, SCR_HEIGHT);
 
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -115,8 +172,6 @@ void processInput(GLFWwindow *window) {
 }
 
 void framebuffer_size_callback(GLFWwindow *window, int width, int height) {
-  if (height == 0)
-    return;
   glViewport(0, 0, width, height);
   SCR_WIDTH = width;
   SCR_HEIGHT = height;

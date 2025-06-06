@@ -46,11 +46,15 @@ else()
     set(GLFW_LIB glfw)
 endif()
 
+add_library(tinyfiledialogs STATIC ${CMAKE_SOURCE_DIR}/src/tinyfiledialogs.c)
+target_include_directories(tinyfiledialogs PUBLIC ${CMAKE_SOURCE_DIR}/include)
+
 # Add the main executable
 add_executable(${PROJECT_NAME} ${SRC_FILES})
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE
+    tinyfiledialogs
     glad
     imgui
     ${GLFW_LIB}
