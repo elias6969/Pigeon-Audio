@@ -63,6 +63,7 @@ int main() {
   player.init();
   bool isrender = false;
   const char *filePath;
+  static float globalGain = 0.05f;
   char imagePath[256] = "";
   VirtualFileSystem vfs("assets");
   
@@ -147,10 +148,14 @@ int main() {
         player.selectedImage = player.textureNames.size() - 1;
         player.loadSelectedTexture();
       }
+
+      ImGui::Separator();
+      ImGui::Text("Settings");
+      ImGui::SliderFloat("Sensitivity", &globalGain, 0.0001f, 1.0f);
       ImGui::End();
     }
 
-    player.render(&amp, &time, dt, SCR_WIDTH, SCR_HEIGHT);
+    player.render(&amp, &time, dt, SCR_WIDTH, SCR_HEIGHT, globalGain);
 
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

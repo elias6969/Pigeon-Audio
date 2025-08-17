@@ -1,20 +1,21 @@
 #include "audio.h"
 #include "filemanager.h"
 #include "stb_image.h"
-#include <GL/gl.h>
+#include "tinyfiledialogs.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <cmath>
 #include <expected>
 #include <fftw3.h>
+#include <filesystem>
 #include <glad/glad.h>
+#include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <iterator>
 #include <mutex>
 #include <ostream>
 #include <portaudio.h>
 #include <vector>
-#include "tinyfiledialogs.h"
 
 std::expected<GLuint, std::string> loadTexture(const char *path) {
   GLuint textureID;
@@ -159,6 +160,31 @@ void AudioPlayer::updateGoo(float dt, float bass) {
 
 void AudioPlayer::init() {
 
+  glGenVertexArrays(1, &particleVAO);
+  glGenBuffers(1, &particleVBO);
+
+  glBindVertexArray(particleVAO);
+  glBindBuffer(GL_ARRAY_BUFFER, particleVBO);
+  glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+
+  // layout: vec2 pos, float size, float alpha
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(PVertex),
+                        (void *)offsetof(PVertex, x));
+
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(PVertex),
+                        (void *)offsetof(PVertex, size));
+
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(PVertex),
+                        (void *)offsetof(PVertex, alpha));
+
+  glBindVertexArray(0);
+
+  // compile tiny shaders into particleProg
+  // and once per app:
+  glEnable(GL_PROGRAM_POINT_SIZE);
   glGenVertexArrays(1, &vao);
   glGenBuffers(1, &vbo);
 
@@ -176,6 +202,7 @@ void AudioPlayer::init() {
   glBufferData(GL_UNIFORM_BUFFER, uboSize, nullptr, GL_DYNAMIC_DRAW);
   glBindBufferRange(GL_UNIFORM_BUFFER, 0, ubo_fft, 0, uboSize);
   start_audio();
+  prevMag.assign(FFT_SIZE / 2, 0.0f);
   initGoo();
 
   glEnable(GL_BLEND);
@@ -224,6 +251,9 @@ void AudioPlayer::init() {
     globShader.LoadShaders((Shaderspath + "driplets.vs").c_str(),
                            (Shaderspath + "driplets.fs").c_str());
 
+    particleShader.LoadShaders((Shaderspath + "particles.vs").c_str(),
+                               (Shaderspath + "particles.fs").c_str());
+
   } catch (std::exception &e) {
     std::cerr << "Fatal: " << e.what() << '\n';
   }
@@ -258,14 +288,102 @@ void render_circle(float amplitude) {
 }
 
 void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
-                         int SCR_HEIGHT) {
+                         int SCR_HEIGHT, float globalGain) {
+
+  // --- Multi-band spectral flux ---
+  auto cur = get_fft_data();
+  if ((int)prevMag.size() != (int)cur.size())
+    prevMag = cur;
+
+  int N = (int)cur.size();
+  int b_end = FFT_SIZE / 32; // ~bass
+  int m_end = FFT_SIZE / 8;  // ~mid
+  b_end = std::min(b_end, N);
+  m_end = std::min(m_end, N);
+
+  float fluxB = 0, fluxM = 0, fluxT = 0;
+  for (int i = 0; i < N; ++i) {
+    float d = cur[i] - prevMag[i];
+    float pos = d > 0.f ? d : 0.f;
+    if (i < b_end)
+      fluxB += pos;
+    else if (i < m_end)
+      fluxM += pos;
+    else
+      fluxT += pos;
+  }
+
+  // running stats per band
+  auto upd = [](float v, float &avg, float &var) {
+    const float a = 0.90f;
+    float newAvg = a * avg + (1 - a) * v;
+    float newVar = a * var + (1 - a) * (v - newAvg) * (v - newAvg);
+    avg = newAvg;
+    var = newVar;
+  };
+
+  upd(fluxB, fluxAvgBass, fluxVarBass);
+  upd(fluxM, fluxAvgMid, fluxVarMid);
+  upd(fluxT, fluxAvgTre, fluxVarTre);
+
+  auto beatTest = [&](float v, float avg, float var, float k, float &strength) {
+    float sd = std::sqrt(std::max(1e-6f, var));
+    float thr = avg + k * sd;
+    strength = (v - thr) / std::max(1e-6f, thr);
+    return v > thr;
+  };
+
+  float sB = 0, sM = 0, sT = 0;
+  bool beatB = beatTest(fluxB, fluxAvgBass, fluxVarBass, beatK, sB);
+  bool beatM = beatTest(fluxM, fluxAvgMid, fluxVarMid, beatK, sM);
+  bool beatT = beatTest(fluxT, fluxAvgTre, fluxVarTre, beatK, sT);
+
+  // pick the strongest normalized beat
+  int band = -1;      // 0=bass,1=mid,2=treble
+  float strength = 0; // >=0
+  if (beatB && sB > strength) {
+    band = 0;
+    strength = sB;
+  }
+  if (beatM && sM > strength) {
+    band = 1;
+    strength = sM;
+  }
+  if (beatT && sT > strength) {
+    band = 2;
+    strength = sT;
+  }
+
+  prevMag = cur;
+
+  if (band >= 0)
+    triggerBeatEvent(band, strength);
+
+  // decay per-frame
+  flash = std::max(0.0f, flash - dt * 6.5f);
+  shake = std::max(0.0f, shake - dt * 2.5f);
+
+  // in render(), after beat decision:
+  glm::vec3 beatTint = (band == 0)   ? glm::vec3(0.2, 0.05, 0.0)
+                       : (band == 1) ? glm::vec3(0.0, 0.1, 0.2)
+                       : (band == 2) ? glm::vec3(0.1, 0.0, 0.2)
+                                     : glm::vec3(0.0);
+  debugTint = 0.9f * debugTint + 0.1f * beatTint * (band >= 0 ? 1.0f : 0.0f);
 
   if (shadermode == 0) { // circle visalizuer or something
     //
     circleShader.use();
     float aspect = (float)SCR_WIDTH / (float)SCR_HEIGHT;
     glm::mat4 projection = glm::ortho(-aspect, aspect, -1.0f, 1.0f);
-    circleShader.setMat4("u_projection", projection);
+
+
+    float jitterAmp = 0.0075f * shake;
+    glm::vec2 camShake(jitterAmp * std::sin(*time * 67.0f),
+                       jitterAmp * std::cos(*time * 53.0f));
+    glm::mat4 view = glm::translate(glm::mat4(1.0f), glm::vec3(camShake, 0.0f));
+    glm::mat4 projView = projection * view;
+
+    circleShader.setMat4("u_projection", projView);
     circleShader.setFloat("u_time", *time);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, imagetex);
@@ -276,10 +394,10 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
 
     const float tau = 0.05f;
     float alpha = std::exp(-dt / tau);
-    const float avgAlpha = 0.995f;  // keeps a long-term average
-    const float compExp = 0.3f;     // <1 = stronger compression of spikes
-    const float globalGain = 0.05f; // 0 = silent, 1 = full sensitivity
-    const float smoothFact = 0.9f;  // closer to 1 = more temporal smoothing
+    const float avgAlpha = 0.995f; // keeps a long-term average
+    const float compExp = 0.3f;    // <1 = stronger compression of spikes
+    // const float globalGain = 0.05f; // 0 = silent, 1 = full sensitivity
+    const float smoothFact = 0.9f; // closer to 1 = more temporal smoothing
 
     auto raw = get_fft_data();
     // Loops over each visual bar that will be drawn
@@ -316,7 +434,13 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
     barShader.use();
     float aspect = (float)SCR_WIDTH / (float)SCR_HEIGHT;
     glm::mat4 projection = glm::ortho(-aspect, aspect, -1.0f, 1.0f);
-    barShader.setMat4("u_projection", projection);
+    float jitterAmp = 0.0075f * shake;
+    glm::vec2 camShake(jitterAmp * std::sin(*time * 67.0f),
+                       jitterAmp * std::cos(*time * 53.0f));
+    glm::mat4 view = glm::translate(glm::mat4(1.0f), glm::vec3(camShake, 0.0f));
+    glm::mat4 projView = projection * view;
+
+    barShader.setMat4("u_projection", projView);
     barShader.setFloat("u_amplitude", *amp);
     barShader.setFloat("u_time", *time);
     glActiveTexture(GL_TEXTURE0);
@@ -328,13 +452,11 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
 
     const float tau = 0.05f;
     float alpha = std::exp(-dt / tau);
-    const float avgAlpha = 0.995f;  // keeps a long-term average
-    const float compExp = 0.3f;     // <1 = stronger compression of spikes
-    const float globalGain = 0.05f; // 0 = silent, 1 = full sensitivity
-    const float smoothFact = 0.9f;  // closer to 1 = more temporal smoothing
+    const float avgAlpha = 0.995f;
+    const float compExp = 0.3f;   
+    const float smoothFact = 0.9f;
 
     auto raw = get_fft_data();
-    // Loops over each visual bar that will be drawn
     for (int i = 0; i < NUM_BARS; ++i) {
       int b0 = barRanges[i].first;
       int b1 = barRanges[i].second;
@@ -409,7 +531,6 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
       if (blob.pos.y > 1.0f)
         blob.pos.y -= 1.0f;
 
-      // Optional: wobble based on bass
       blob.pos += glm::vec2(0.002f * sin((*time + blob.pos.y) * 10.0f),
                             0.002f * cos((*time + blob.pos.x) * 10.0f)) *
                   bass;
@@ -425,4 +546,125 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
   }
+
+  updateParticles(dt);
+
+  // build cpu vertex array in NDC
+  std::vector<PVertex> pv;
+  pv.reserve(particles.size());
+  for (const auto &p : particles) {
+    float x = (p.pos.x - 0.5f) * 2.0f; // NDC
+    float y = (p.pos.y - 0.5f) * 2.0f;
+    float a = std::clamp(p.life / burstLife, 0.0f, 1.0f);
+    pv.push_back({x, y, p.size, a});
+  }
+
+  // upload
+  glBindVertexArray(particleVAO);
+  glBindBuffer(GL_ARRAY_BUFFER, particleVBO);
+  glBufferData(GL_ARRAY_BUFFER, pv.size() * sizeof(PVertex), pv.data(),
+               GL_DYNAMIC_DRAW);
+
+  // additive glow
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_ONE, GL_ONE);
+
+  // draw with particle shader
+  particleShader.use();
+  particleShader.setFloat("u_flash", flash);
+  particleShader.setVec3("u_debugTint", debugTint);
+  glDrawArrays(GL_POINTS, 0, (GLsizei)pv.size());
+
+  // restore
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glBindVertexArray(0);
+}
+
+void AudioPlayer::triggerBeatEvent(int band, float strength) {
+  // clamp strength to a sane range
+  strength = std::clamp(strength, 0.0f, 3.0f);
+
+  // scale flash & shake by strength
+  flash = std::min(1.0f, flash + 0.75f * (0.6f + 0.4f * strength));
+  shake = std::min(0.35f, shake + 0.10f * (0.6f + 0.4f * strength));
+
+  // rotate palette on stronger hits
+  if (strength > 0.15f)
+    paletteIndex = (paletteIndex + 1) % std::max(1, paletteCount);
+
+  // choose an emitter origin from band
+  glm::vec2 origin;
+  switch (band) {
+  case 0: // bass: bottom-center
+    origin = {0.5f, 0.15f};
+    break;
+  case 1: // mid: mid-left/right alternating
+    origin = (rand() & 1) ? glm::vec2{0.20f, 0.5f} : glm::vec2{0.80f, 0.5f};
+    break;
+  case 2: // treble: top region
+    origin = {0.5f, 0.85f};
+    break;
+  default:
+    origin = {0.5f, 0.5f};
+  }
+
+  // spawn a directional burst biased away from screen center
+  glm::vec2 center = {0.5f, 0.5f};
+  glm::vec2 away = glm::normalize(origin - center);
+  if (glm::length(away) < 1e-3f)
+    away = {0.0f, 1.0f};
+
+  int count =
+      (int)(burstCount * (0.6f + 0.7f * std::clamp(strength, 0.0f, 1.0f)));
+  float spdBase = burstSpeed * (1.0f + 1.2f * std::clamp(strength, 0.0f, 1.0f));
+
+  particles.reserve(particles.size() + count);
+  for (int i = 0; i < count; ++i) {
+    // random small cone around 'away'
+    float jitter = 0.6f + 0.4f * ((float)rand() / RAND_MAX);
+    float ang = ((float)rand() / RAND_MAX - 0.5f) * 0.9f; // +/- ~0.45 rad
+    float cs = std::cos(ang), sn = std::sin(ang);
+    glm::vec2 dir = glm::normalize(
+        glm::vec2(away.x * cs - away.y * sn, away.x * sn + away.y * cs));
+
+    Particle p;
+    p.pos = origin;
+    p.velocity = dir * spdBase * jitter;
+    p.life = burstLife * (0.8f + 0.5f * ((float)rand() / RAND_MAX)) *
+             (0.9f + 0.2f * strength);
+    p.size =
+        2.0f + 3.0f * ((float)rand() / RAND_MAX) * (0.9f + 0.2f * strength);
+    p.hue = (float)band / 3.0f; // simple mapping; use for color later
+    particles.push_back(p);
+  }
+}
+
+void AudioPlayer::updateParticles(float dt) {
+  for (auto &p : particles) {
+    p.pos += p.velocity * dt;
+    p.velocity *= (1.0f - dt * 0.8f); // gentle drag
+    p.life -= dt;
+  }
+  particles.erase(
+      std::remove_if(particles.begin(), particles.end(),
+                     [](const Particle &p) { return p.life <= 0.0f; }),
+      particles.end());
+}
+
+int pickDominantBar(const std::vector<float> &raw,
+                    const std::vector<std::pair<int, int>> &ranges) {
+  int best = 0;
+  float bestVal = -1.f;
+  for (int i = 0; i < (int)ranges.size(); ++i) {
+    auto [b0, b1] = ranges[i];
+    float s = 0.f;
+    for (int b = b0; b <= b1; ++b)
+      s += raw[b];
+    s /= std::max(1, b1 - b0 + 1);
+    if (s > bestVal) {
+      bestVal = s;
+      best = i;
+    }
+  }
+  return best;
 }
