@@ -46,3 +46,4 @@ Thumbs.db
 
 # Ignore the .git folder — technically unnecessary
 .git/
+core

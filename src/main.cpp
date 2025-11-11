@@ -4,6 +4,7 @@
 #include "filemanager.h"
 #include <GLFW/glfw3.h>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <glad/glad.h>
 #include <iostream>
@@ -65,8 +66,10 @@ int main() {
   const char *filePath;
   static float globalGain = 0.05f;
   char imagePath[256] = "";
+  int fitmode = 1;
   VirtualFileSystem vfs("assets");
-  
+
+  player.imagefitmode = 1;
   // render loop
   while (!glfwWindowShouldClose(window)) {
     processInput(window);
@@ -91,9 +94,14 @@ int main() {
 
     if (isrender) {
       ImGui::Begin("Visualization");
-      const char *items[] = {"Simple", "Bars", "glob"};
+      const char *items[] = {"Simple", "Circle", "glob"};
       ImGui::Combo("Shader Mode", &player.shadermode, items,
                    IM_ARRAYSIZE(items));
+      if (player.shadermode == 0) {
+        const char *simpleTypes[] = {"Simple", "Pretty", "Wave", "Schizo 1", "Schizo 2", "Schizo 3", "Schizo 4"};
+        ImGui::Combo("Simple Type", &player.simpleType, simpleTypes,
+                     IM_ARRAYSIZE(simpleTypes));
+      }
       ImGui::Separator();
       ImGui::Text("Image");
 
@@ -152,6 +160,20 @@ int main() {
       ImGui::Separator();
       ImGui::Text("Settings");
       ImGui::SliderFloat("Sensitivity", &globalGain, 0.0001f, 1.0f);
+      ImGui::Combo("Image fit", &player.imagefitmode, "Center\0Stretch\0");
+      ImGui::Text("Resolution width: %d, height: %d", SCR_WIDTH, SCR_HEIGHT);
+
+      ImGui::SeparatorText("Color Settings");
+
+      static float color[3] = {player.settings.barColor.r,
+                               player.settings.barColor.g,
+                               player.settings.barColor.b};
+
+      if (ImGui::ColorEdit3("Bar Color", color)) {
+        player.settings.barColor = glm::vec3(color[0], color[1], color[2]);
+      }
+
+      ImGui::Checkbox("Animate Hue", &player.settings.animateHue);
       ImGui::End();
     }
 

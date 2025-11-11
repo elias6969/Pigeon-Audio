@@ -9,6 +9,7 @@
 #include <fftw3.h>
 #include <filesystem>
 #include <glad/glad.h>
+#include <glm/fwd.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <iterator>
@@ -242,14 +243,37 @@ void AudioPlayer::init() {
       std::cerr << "No textures available or selectedImage out of range!\n";
     }
 
-    circleShader.LoadShaders((Shaderspath + "simple.vs").c_str(),
+    // Main Shaders
+    simpleShader.LoadShaders((Shaderspath + "simple.vs").c_str(),
                              (Shaderspath + "simple.fs").c_str());
-    barShader.LoadShaders((Shaderspath + "circle.vs").c_str(),
-                          (Shaderspath + "bars.fs").c_str());
-    spiralShader.LoadShaders((Shaderspath + "spiral.vs").c_str(),
-                             (Shaderspath + "spiral.fs").c_str());
+
+    simpleShaderGlow.LoadShaders((Shaderspath + "simple.vs").c_str(),
+                                 (Shaderspath + "simpleGlow.fs").c_str());
+
+    simpleShaderWave.LoadShaders((Shaderspath + "simple.vs").c_str(),
+                                 (Shaderspath + "wave.fs").c_str());
+
+    simpleShaderSchizo1.LoadShaders((Shaderspath + "simple.vs").c_str(),
+                                    (Shaderspath + "divine.fs").c_str());
+
+    simpleShaderSchizo2.LoadShaders((Shaderspath + "simple.vs").c_str(),
+                                    (Shaderspath + "divinesecond.fs").c_str());
+
+    simpleShaderSchizo3.LoadShaders((Shaderspath + "simple.vs").c_str(),
+                                    (Shaderspath + "divinecoolnow.fs").c_str());
+
+    simpleShaderSchizo4.LoadShaders((Shaderspath + "simple.vs").c_str(),
+                                    (Shaderspath + "coolrings.fs").c_str());
+
+    circleShader.LoadShaders((Shaderspath + "bars.vs").c_str(),
+                             (Shaderspath + "bars.fs").c_str());
+
     globShader.LoadShaders((Shaderspath + "driplets.vs").c_str(),
                            (Shaderspath + "driplets.fs").c_str());
+
+    // Misc shaders
+    spiralShader.LoadShaders((Shaderspath + "spiral.vs").c_str(),
+                             (Shaderspath + "spiral.fs").c_str());
 
     particleShader.LoadShaders((Shaderspath + "particles.vs").c_str(),
                                (Shaderspath + "particles.fs").c_str());
@@ -370,12 +394,41 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
                                      : glm::vec3(0.0);
   debugTint = 0.9f * debugTint + 0.1f * beatTint * (band >= 0 ? 1.0f : 0.0f);
 
-  if (shadermode == 0) { // circle visalizuer or something
-    //
-    circleShader.use();
+  if (shadermode == 0) { // Simple
+    Shader *activeSimple = nullptr;
+    switch (simpleType) {
+    case 0:
+      activeSimple = &simpleShader;
+      break;
+    case 1:
+      activeSimple = &simpleShaderGlow;
+      break;
+    case 2:
+      activeSimple = &simpleShaderWave;
+      break;
+    case 3:
+      activeSimple = &simpleShaderSchizo1;
+      break;
+    case 4:
+      activeSimple = &simpleShaderSchizo2;
+      break;
+    case 5:
+      activeSimple = &simpleShaderSchizo3;
+      break;
+    case 6:
+      activeSimple = &simpleShaderSchizo4;
+      break;
+    default:
+      activeSimple = &simpleShader;
+      break;
+    }
+    activeSimple->use();
+
+    activeSimple->use();
+    activeSimple->setVec3("u_barColor", settings.barColor);
+    activeSimple->setBool("u_animateHue", settings.animateHue);
     float aspect = (float)SCR_WIDTH / (float)SCR_HEIGHT;
     glm::mat4 projection = glm::ortho(-aspect, aspect, -1.0f, 1.0f);
-
 
     float jitterAmp = 0.0075f * shake;
     glm::vec2 camShake(jitterAmp * std::sin(*time * 67.0f),
@@ -383,11 +436,13 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
     glm::mat4 view = glm::translate(glm::mat4(1.0f), glm::vec3(camShake, 0.0f));
     glm::mat4 projView = projection * view;
 
-    circleShader.setMat4("u_projection", projView);
-    circleShader.setFloat("u_time", *time);
+    activeSimple->setMat4("u_projection", projView);
+    activeSimple->setFloat("u_time", *time);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, imagetex);
-    circleShader.setInt("u_texture", 0);
+    activeSimple->setInt("u_texture", 0);
+    activeSimple->setInt("u_imagefitmode", imagefitmode);
+    activeSimple->setVec2("u_resolution", glm::vec2(SCR_WIDTH, SCR_HEIGHT));
 
     static float smoothedBinds[NUM_BARS] = {0.0f};
     static float runningAvg[NUM_BARS] = {0.0f};
@@ -429,9 +484,10 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
 
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
-  } else if (shadermode == 1) { // Bar Visualiser
-    barShader.use();
+  } else if (shadermode == 1) { // Circle Visualiser
+    circleShader.use();
+    circleShader.setVec3("u_barColor", settings.barColor);
+    circleShader.setBool("u_animateHue", settings.animateHue);
     float aspect = (float)SCR_WIDTH / (float)SCR_HEIGHT;
     glm::mat4 projection = glm::ortho(-aspect, aspect, -1.0f, 1.0f);
     float jitterAmp = 0.0075f * shake;
@@ -440,12 +496,14 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
     glm::mat4 view = glm::translate(glm::mat4(1.0f), glm::vec3(camShake, 0.0f));
     glm::mat4 projView = projection * view;
 
-    barShader.setMat4("u_projection", projView);
-    barShader.setFloat("u_amplitude", *amp);
-    barShader.setFloat("u_time", *time);
+    circleShader.setMat4("u_projection", projView);
+    circleShader.setFloat("u_amplitude", *amp);
+    circleShader.setFloat("u_time", *time);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, imagetex);
-    barShader.setInt("u_texture", 0);
+    circleShader.setInt("u_texture", 0);
+    circleShader.setInt("u_imagefitmode", imagefitmode);
+    circleShader.setVec2("u_resolution", glm::vec2(SCR_WIDTH, SCR_HEIGHT));
 
     static float smoothedBinds[NUM_BARS] = {0.0f};
     static float runningAvg[NUM_BARS] = {0.0f};
@@ -453,7 +511,7 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
     const float tau = 0.05f;
     float alpha = std::exp(-dt / tau);
     const float avgAlpha = 0.995f;
-    const float compExp = 0.3f;   
+    const float compExp = 0.3f;
     const float smoothFact = 0.9f;
 
     auto raw = get_fft_data();
@@ -511,12 +569,17 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
     treble /= (fft.size() - treble_start);
     updateGoo(dt, bass);
     globShader.use();
+    globShader.setVec3("u_barColor", settings.barColor);
+    globShader.setBool("u_animateHue", settings.animateHue);
+
     // rainShader.setFloat("u_amplitude", *amp);
     globShader.setFloat("u_time", *time);
     globShader.setFloat("u_bass", bass);
     globShader.setFloat("u_mid", mid);
     globShader.setFloat("u_treble", treble);
     globShader.setInt("u_sceneTex", 0);
+    globShader.setInt("u_imagefitmode", imagefitmode);
+    globShader.setVec2("u_resolution", glm::vec2(SCR_WIDTH, SCR_HEIGHT));
 
     for (auto &blob : gooBlobs) {
       blob.pos += blob.velocity * dt;
@@ -547,8 +610,8 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
   }
 
-  updateParticles(dt);
-
+  // OLD PARTICLE SHIT
+  /**updateParticles(dt);
   // build cpu vertex array in NDC
   std::vector<PVertex> pv;
   pv.reserve(particles.size());
@@ -573,7 +636,7 @@ void AudioPlayer::render(float *amp, float *time, float dt, int SCR_WIDTH,
   particleShader.use();
   particleShader.setFloat("u_flash", flash);
   particleShader.setVec3("u_debugTint", debugTint);
-  glDrawArrays(GL_POINTS, 0, (GLsizei)pv.size());
+  glDrawArrays(GL_POINTS, 0, (GLsizei)pv.size());**/
 
   // restore
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

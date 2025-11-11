@@ -4,6 +4,7 @@
 #include "Shader.h"
 #include <cmath>
 #include <fftw3.h>
+#include <glm/fwd.hpp>
 #include <iostream>
 #include <mutex>
 #include <portaudio.h>
@@ -36,6 +37,11 @@ struct Particle {
   float hue{0.0f};  // optional, for coloring
 };
 
+struct VisualizerSetting {
+  glm::vec3 barColor = glm::vec3(0.2f, 1.0f, 0.5f);
+  bool animateHue = false;
+};
+
 // ----- Main controller -----
 class AudioPlayer {
 public:
@@ -56,7 +62,8 @@ public:
   void updateParticles(float dt);
 
   // ---- Mode / UI state ----
-  int shadermode{0}; // 0=circle, 1=bars, 2=goo (as per your .cpp)
+  int shadermode{0}; // 0=simple, 1=circle, 2=goo (as per your .cpp)
+  int simpleType{0};
   int selectedImage{-1};
   std::vector<std::string> textureNames;  // filenames
   std::vector<const char *> textureItems; // raw C-strings for UI lists
@@ -87,6 +94,10 @@ public:
   float sensitivity{
       0.12f};
 
+  // ---- Settings parameters ----
+  int imagefitmode;
+  VisualizerSetting settings;
+
 private:
   // ---- FFT-to-bar mapping ----
   std::vector<std::pair<int, int>> barRanges; // [b0,b1] bins per visual bar
@@ -96,8 +107,16 @@ private:
   std::string imagePath;
 
   // ---- Shaders ----
+  Shader simpleShader;
+  Shader simpleShaderWave;
+  Shader simpleShaderGlow;
+  Shader simpleShaderSchizo1;
+  Shader simpleShaderSchizo2;
+  Shader simpleShaderSchizo3;
+  Shader simpleShaderSchizo4;
+  Shader simpleShaderSchizo5;
+
   Shader circleShader;
-  Shader barShader;
   Shader extraShader;
   Shader spiralShader;
   Shader globShader;
